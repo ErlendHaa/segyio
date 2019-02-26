@@ -1,0 +1,105 @@
+version: 2.1
+
+workflows:
+    version: 2.1
+    build:
+        jobs:
+            - python35-linux
+              #            - python36-linux
+              #            - python36-linux-clang
+              #            - python37-linux
+              #            - python35-macos
+              #            - python36-macos
+              #            - python37-macos
+
+macos-req: &macos-req
+    run:
+        name: Install requirements
+        command: |
+            brew update
+            brew install cppcheck
+            brew install cmake
+            brew install $PYTHON
+            sudo pip install --upgrade pip
+            sudo pip install -r requirements.txt
+            sudo pip install bandit setuptools setuptools-scm pytest pytest-runner sphinx
+
+linux-req: &linux-req
+    run:
+        name: Install requirements
+        command: |
+            sudo apt-get update
+            sudo apt-get install -y cmake
+            if [[ "$CIRCLE_JOB" == "python37-clang" ]]; then
+                sudo apt-get install -y clang-6.0;
+            fi
+            sudo apt-get install -y cppcheck
+            sudo pip install --upgrade pip
+            sudo pip install -r requirements.txt
+            sudo pip install bandit setuptools setuptools-scm pytest pytest-runner sphinx
+
+build-test-install: &build-test-install
+    run:
+        name: Build, Test and Install
+        command: |
+            bandit -c bandit.yml -r python
+            mkdir build
+            pushd build
+            export DYLD_LIBRARY_PATH=$PWD/lib
+            cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+                    -DBUILD_SHARED_LIBS=ON \
+                    -DCMAKE_BUILD_TYPE=Release \
+                    -DCMAKE_INSTALL_NAME_DIR=/usr/local/lib \
+                    $MKDOC \
+                    $pyenable ..
+
+            cppcheck --enable=style,portability,performance,warning \
+                        --library=posix \
+                        --library=../cppcheck/segyio.cfg \
+                        --suppressions-list=../cppcheck/suppressions.txt \
+                        --inline-suppr \
+                        --project=compile_commands.json \
+                        --error-exitcode=1
+
+            make
+            ctest --output-on-failure
+            sudo make install
+            popd
+
+build-wheels: &build-wheels
+    run:
+        name: Build and test wheels
+        command: |
+              sudo pip install cibuildwheel
+              cibuildwheel --output-dir wheelhouse
+
+store-wheels: &store-wheels
+    store_artifacts:
+        path: wheelhouse/
+
+jobs:
+    python35-linux:
+        docker:
+            - image: circleci/python:3.5
+
+        environment:
+            CIBW_BUILD: cp27-*
+
+        steps:
+            - checkout
+            - setup_remote_docker
+            - *linux-req
+            - *build-test-install
+            - *build-wheels
+            - *store-wheels
+
+    python36-macos:
+        macos:
+            xcode: "10.0.0"
+        environment:
+            PYTHON: python3.5
+            CIBW_BUILD: cp27-*
+
+        steps:
+            - checkout
+            - *macos-req
